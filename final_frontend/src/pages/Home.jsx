@@ -457,30 +457,7 @@ const handleAudioUpload = async (e) => {
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center space-x-8">
-            <a
-              href="#features"
-              className="hover:text-purple-600 transition-colors font-medium"
-            >
-              Features
-            </a>
-            <a
-              href="#examples"
-              className="hover:text-purple-600 transition-colors font-medium"
-            >
-              Examples
-            </a>
-            <a
-              href="#pricing"
-              className="hover:text-purple-600 transition-colors font-medium"
-            >
-              Pricing
-            </a>
-            <a
-              href="#login"
-              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 px-6 py-2 rounded-full transition-all duration-300 shadow-lg hover:shadow-xl text-white font-medium"
-            >
-              Sign In
-            </a>
+             
           </nav>
 
           {/* Mobile menu button */}
@@ -503,34 +480,7 @@ const handleAudioUpload = async (e) => {
               className="md:hidden"
             >
               <div className="container mx-auto px-4 py-2 flex flex-col space-y-4 bg-white bg-opacity-95 backdrop-blur-md">
-                <a
-                  href="#features"
-                  className="py-2 hover:text-purple-600 transition-colors font-medium"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Features
-                </a>
-                <a
-                  href="#examples"
-                  className="py-2 hover:text-purple-600 transition-colors font-medium"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Examples
-                </a>
-                <a
-                  href="#pricing"
-                  className="py-2 hover:text-purple-600 transition-colors font-medium"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Pricing
-                </a>
-                <a
-                  href="#login"
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 px-4 py-2 rounded-full transition-all text-center text-white font-medium"
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  Sign In
-                </a>
+                 
               </div>
             </motion.div>
           )}

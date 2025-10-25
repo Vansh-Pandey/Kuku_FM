@@ -1,4 +1,4 @@
-# generate_speech
+# generate_speech.py
 
 import os
 import torch
@@ -6,6 +6,8 @@ import logging
 import re
 import numpy as np
 import nltk
+import time
+import glob
 from openvoice.api import ToneColorConverter
 from melo.api import TTS
 from scipy.io import wavfile
@@ -43,6 +45,22 @@ def clean_voice_embeddings():
         os.makedirs(EMBEDDING_DIR, exist_ok=True)
         logger.info(f"Created embeddings directory: {EMBEDDING_DIR}")
 
+def get_latest_embedding(character_name):
+    """Get the most recent embedding file for a character."""
+    base_name = character_name.lower().replace(' ', '_')
+    pattern = os.path.join(EMBEDDING_DIR, f"{base_name}_*.pth")
+    
+    # Find all matching embedding files
+    embedding_files = glob.glob(pattern)
+    
+    if not embedding_files:
+        return None
+    
+    # Sort by modification time (newest first)
+    embedding_files.sort(key=os.path.getmtime, reverse=True)
+    
+    return embedding_files[0]
+
 def parse_dialogue(file_path):
     """Parse the input file and extract character dialogue."""
     try:
@@ -58,8 +76,9 @@ def parse_dialogue(file_path):
         logger.info(f"Loaded input text: {len(text)} characters")
         
         # Find dialogue patterns: <Character> <optional_mood> "Dialogue"
-        pattern = r'(?:^|\n)<([^>]+)>\s*(?:<([^>]+)>)?\s*"([^"]*)"'
-        matches = re.findall(pattern, text)
+        # Updated pattern to capture dialogue until the next character tag or end of text
+        pattern = r'(?:^|\n)<([^>]+)>\s*(?:<([^>]+)>)?\s*"(.*?)(?="(?:\s*\n<|$))'
+        matches = re.findall(pattern, text, re.DOTALL)
         
         logger.info(f"Found {len(matches)} dialogue entries")
         
@@ -80,56 +99,55 @@ def parse_dialogue(file_path):
         logger.error(f"Error parsing dialogue: {e}", exc_info=True)
         return []
 
-def process_character_voices(character_voices, force_new_embeddings=False):
+def process_character_voices(character_voices):
     """Process character voices into embeddings."""
     from openvoice import se_extractor
-    
-    # Only clean embeddings if starting a new story and forcing new embeddings
-    if force_new_embeddings:
-        clean_voice_embeddings()
     
     os.makedirs(EMBEDDING_DIR, exist_ok=True)
     processed_voices = {}
     
     for character, path in character_voices.items():
-        embedding_name = character.lower().replace(' ', '_')
-        embedding_path = f'{EMBEDDING_DIR}/{embedding_name}.pth'
+        base_name = character.lower().replace(' ', '_')
         
-        # Case 1: Path is already an embedding file
-        if path.endswith('.pth'):
+        # For all characters, create timestamped embedding files
+        if path.endswith(('.mp3', '.wav')):
+            # Create timestamped embedding file
+            timestamp = int(time.time())
+            embedding_path = f'{EMBEDDING_DIR}/{base_name}_{timestamp}.pth'
+            
+            logger.info(f"Generating new embedding for {character} from {path}")
+            try:
+                target_se, _ = se_extractor.get_se(path, tone_color_converter, vad=True)
+                torch.save(target_se, embedding_path)
+                processed_voices[character] = embedding_path
+                logger.info(f"Successfully generated new embedding for {character}")
+            except Exception as e:
+                logger.error(f"Failed to generate embedding for {character}: {e}")
+                continue
+        elif path.endswith('.pth'):
+            # If an embedding path is provided directly, use it
             if os.path.exists(path):
                 processed_voices[character] = path
                 logger.info(f"Using provided embedding file for {character}")
             else:
                 logger.warning(f"Embedding file {path} not found for {character}")
-                
-        # Case 2: Path is an audio file
-        elif path.endswith(('.mp3', '.wav')):
-            # Check if embedding already exists and we're not forcing new ones
-            if os.path.exists(embedding_path) and not force_new_embeddings:
-                processed_voices[character] = embedding_path
-                logger.info(f"Using existing embedding for {character}")
-            else:
-                logger.info(f"Generating new embedding for {character} from {path}")
-                try:
-                    target_se, _ = se_extractor.get_se(path, tone_color_converter, vad=True)
-                    torch.save(target_se, embedding_path)
-                    processed_voices[character] = embedding_path
-                    logger.info(f"Successfully generated embedding for {character}")
-                except Exception as e:
-                    logger.error(f"Failed to generate embedding for {character}: {e}")
-                    continue
         else:
-            logger.warning(f"Unsupported file format for {character}: {path}")
+            # For characters without new audio, use their latest embedding
+            latest_embedding = get_latest_embedding(character)
+            if latest_embedding:
+                processed_voices[character] = latest_embedding
+                logger.info(f"Using latest embedding for {character}: {latest_embedding}")
+            else:
+                logger.warning(f"No embedding found for {character}")
     
     return processed_voices
 
-def generate_audio(dialogue, character_voices, output_dir='outputs_v2', force_new_embeddings=False):
+def generate_audio(dialogue, character_voices, output_dir='outputs_v2'):
     """Generate audio for each dialogue line and concatenate them."""
     os.makedirs(output_dir, exist_ok=True)
     
     # Process voices and generate embeddings if needed
-    processed_voices = process_character_voices(character_voices, force_new_embeddings)
+    processed_voices = process_character_voices(character_voices)
     
     if not processed_voices:
         logger.error("No valid character voices. Exiting.")

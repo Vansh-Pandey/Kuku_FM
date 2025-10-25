@@ -11,7 +11,7 @@ from services.speech_text import speech_processor  # Import the speech processor
 load_dotenv()
 
 # Change this to use GEMINI_API_KEY
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
@@ -37,17 +37,19 @@ async def create_story(request: StoryRequest):
     try:
         # Generate the story
         print("Gone to story generation")
+        os.environ["HTTP_PROXY"] = ""
+        os.environ["HTTPS_PROXY"] = ""
         story = generate_story(
             genre=request.genre,
             length=request.length,
             context=request.context,
-            api_key=GEMINI_API_KEY  # Changed to use Gemini key
+            api_key=OPENAI_API_KEY  # Changed to use Gemini key
         )
         if not story:
             raise ValueError("Story generation failed")
 
         print(story)
-        tagged_story = analyze_and_tag_story(story, api_key=GEMINI_API_KEY)  # Changed to use Gemini key
+        tagged_story = analyze_and_tag_story(story, api_key=OPENAI_API_KEY)  # Changed to use Gemini key
         if tagged_story is None:
             raise ValueError("Story tagging failed")
 
@@ -64,6 +66,8 @@ async def create_story(request: StoryRequest):
 @app.post("/generate-voice")
 async def generate_voice(request: VoiceRequest):
     try:
+        os.environ["HTTP_PROXY"] = ""
+        os.environ["HTTPS_PROXY"] = ""
         tagged_story = request.tagged_story
         if not tagged_story:
             raise ValueError("No tagged story provided")

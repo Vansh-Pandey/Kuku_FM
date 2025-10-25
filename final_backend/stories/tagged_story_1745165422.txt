@@ -1,0 +1,5 @@
+<Narrator><neutral>"Moon-kissed glade, Oberon raged."
+<Narrator><neutral>"Titania held a mortal child."
+<Titania><joy>"Mine!"
+<Narrator><neutral>"Oberon's fury ignited."
+<Narrator><anger>"Moon-kissed glade, Oberon raged. Titania held a mortal child. "Mine!" she proclaimed. Oberon's fury ignited, eyes blazing emerald fire."

@@ -18,7 +18,9 @@ import merge_audio_bgm
 import re
 import jamendo
 from datetime import datetime
+from difflib import SequenceMatcher
 import os.path
+from typing import Optional
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -116,7 +118,7 @@ async def parse_characters(file: UploadFile = File(...)):
 @app.get("/latest-story/")
 async def get_latest_story():
     """Get the latest story file from stories directory."""
-    stories_dir = "C:/Users/SAKSHAM/Downloads/backend/backend/stories"
+    stories_dir = "../stories"
     
     try:
         # Get all .txt files in the stories directory
@@ -223,24 +225,150 @@ async def get_word_timestamps():
         raise HTTPException(status_code=404, detail="Word timestamps not available")
 
 
-def generate_word_timestamps(audio_path: str):
-    """Generate word-level timestamps using Whisper."""
+def load_text_file(file_path: str) -> str:
+    """Load and return the content of the text file with appropriate encoding."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        with open(file_path, 'r', encoding='latin-1') as f:
+            return f.read()
+    except Exception as e:
+        raise Exception(f"Error reading text file {file_path}: {str(e)}")
+
+def parse_dialogue(text: str) -> list[dict[str, str]]:
+    """Parse the input text into a list of dialogue entries with character and text."""
+    dialogue_entries = []
+    dialogue_pattern = r'(?:^|\n)<([^>]+)>(?:\s*<[^>]+>)?\s*"([^"]*)"'
+    matches = re.findall(dialogue_pattern, text)
+    
+    for character, line in matches:
+        dialogue_entries.append({
+            'character': character.strip(),
+            'text': line.strip()
+        })
+    
+    return dialogue_entries
+
+def align_words(whisper_words: list[dict], correct_text: str) -> list[dict]:
+    """Align Whisper's word timestamps with the correct text from the input file."""
+    correct_words = correct_text.split()
+    whisper_word_texts = [w['word'].strip() for w in whisper_words]
+    aligned_words = []
+    
+    if not correct_words or not whisper_words:
+        return aligned_words
+    
+    matcher = SequenceMatcher(None, whisper_word_texts, correct_words)
+    
+    if 0.7 <= len(correct_words) / max(len(whisper_words), 1) <= 1.3:
+        for i, correct_word in enumerate(correct_words):
+            if i < len(whisper_words):
+                word_info = whisper_words[i].copy()
+                word_info['word'] = correct_word
+                word_info['aligned'] = True
+                aligned_words.append(word_info)
+            else:
+                last_word = whisper_words[-1]
+                word_info = {
+                    'word': correct_word,
+                    'start': last_word['end'],
+                    'end': last_word['end'] + 0.2,
+                    'probability': 0.9,
+                    'aligned': True
+                }
+                aligned_words.append(word_info)
+    else:
+        start_time = whisper_words[0]['start']
+        end_time = whisper_words[-1]['end']
+        total_duration = end_time - start_time
+        
+        for i, word in enumerate(correct_words):
+            relative_pos = i / max(len(correct_words) - 1, 1)
+            word_start = start_time + (relative_pos * total_duration)
+            word_end = start_time + ((i + 1) / max(len(correct_words), 1) * total_duration)
+            aligned_words.append({
+                'word': word,
+                'start': word_start,
+                'end': word_end,
+                'probability': 0.9,
+                'aligned': True
+            })
+    
+    return aligned_words
+
+def generate_word_timestamps(audio_path: str) -> Optional[str]:
+    """Generate word-level timestamps by aligning audio with the input text."""
     try:
         logger.info(f"Generating word timestamps for {audio_path}")
         
-        # Load Whisper model (base is small and fast enough for this purpose)
+        # Create output directory
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        # Load text file
+        if not os.path.exists(INPUT_TEXT_FILE_PATH):
+            raise FileNotFoundError(f"Text file {INPUT_TEXT_FILE_PATH} not found")
+        
+        original_text = load_text_file(INPUT_TEXT_FILE_PATH)
+        dialogue_entries = parse_dialogue(original_text)
+        
+        # Load Whisper model
         model = whisper.load_model("base")
         
-        # Transcribe with word timestamps
+        # Transcribe audio with word-level timestamps
         result = model.transcribe(audio_path, word_timestamps=True)
         
-        # Save the result as JSON
-        timestamp_file = os.path.join(OUTPUT_DIR, "word_timestamps.json")
-        with open(timestamp_file, "w") as f:
-            json.dump(result, f, indent=2)
+        # Initialize corrected segments
+        corrected_segments = []
+        used_entries = []
+        
+        # Align each segment with a dialogue entry
+        for segment in result['segments']:
+            whisper_text = segment['text'].strip().lower()
+            best_match = None
+            best_similarity = 0
             
+            # Find the best matching dialogue entry
+            for entry in dialogue_entries:
+                if entry in used_entries:
+                    continue
+                entry_text = entry['text'].lower()
+                common_words = set(whisper_text.split()) & set(entry_text.split())
+                similarity = len(common_words) / max(len(whisper_text.split()), 1)
+                
+                if similarity > best_similarity and similarity > 0.3:
+                    best_similarity = similarity
+                    best_match = entry
+            
+            if best_match:
+                # Create new segment with correct text
+                new_segment = segment.copy()
+                new_segment['text'] = best_match['text']
+                new_segment['character'] = best_match['character']
+                
+                # Align words
+                if 'words' in segment and segment['words']:
+                    new_segment['words'] = align_words(segment['words'], best_match['text'])
+                
+                corrected_segments.append(new_segment)
+                used_entries.append(best_match)
+            else:
+                # Keep original segment if no match found
+                corrected_segments.append(segment)
+        
+        # Create final result
+        aligned_result = result.copy()
+        aligned_result['segments'] = corrected_segments
+        aligned_result['text'] = " ".join([seg['text'] for seg in corrected_segments])
+        
+        # Save to JSON
+        timestamp_file = os.path.join(OUTPUT_DIR, "word_timestamps.json")
+        with open(timestamp_file, "w", encoding='utf-8') as f:
+            json.dump(aligned_result, f, indent=2)
+        
         logger.info(f"Word timestamps saved to {timestamp_file}")
         return timestamp_file
+    
     except Exception as e:
         logger.error(f"Error generating word timestamps: {str(e)}")
         return None

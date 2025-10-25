@@ -1,0 +1,5 @@
+<Narrator><neutral>"The moon, a chipped porcelain plate in the inky sky, cast skeletal shadows across the tiled roofs of ancient Pingyao. The air, thick with jasmine and a metallic tang of fear, clung to Saqib like a shroud."
+<Saqib><fear>"Priansh, I don't like this,"
+<Narrator><neutral>"his hand trembling on the rusty bars of the Pingyao Zoo's back gate."
+<Narrator><neutral>"Priansh, ever the reckless one, grinned, eyes gleaming."
+<Priansh><joy>"Relax, Saqib. Imagine, a real dragon! We'll be legends."

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
-import SubtitlePlayer from './SubPlayer'; // Adjust the import path as needed
+import SubtitlePlayer from "./SubPlayer"; // Adjust the import path as needed
+import { Mic, Headphones } from "lucide-react";
 
 // API base URL - can be changed to environment variable for production
 const API_URL = "http://localhost:8000";
@@ -13,30 +14,64 @@ function AudioPage() {
   const [status, setStatus] = useState("");
   const [audioUrl, setAudioUrl] = useState(null);
   const [storyFilename, setStoryFilename] = useState("");
-  
+
   // UI state management
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [displayProgress, setDisplayProgress] = useState(0); // For smooth animation
   const [progressStage, setProgressStage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  
+  const [lastProgressUpdate, setLastProgressUpdate] = useState(Date.now()); // Track last update time
+
   // Voice data
   const [defaultVoices, setDefaultVoices] = useState([]);
   const [voiceCategories, setVoiceCategories] = useState({});
 
+  // Smooth progress animation with fallback
+  useEffect(() => {
+    if (!isGenerating) return;
+
+    const animateProgress = () => {
+      setDisplayProgress((prev) => {
+        if (prev < progress) {
+          return Math.min(prev + 0.5, progress); // Smooth increment
+        }
+        // Fallback: if stuck for 30 seconds, simulate progress up to 75%
+        const now = Date.now();
+        if (
+          progress === prev &&
+          now - lastProgressUpdate > 30000 &&
+          prev < 75
+        ) {
+          return Math.min(prev + 0.2, 75); // Slow incremental fallback
+        }
+        return prev;
+      });
+    };
+
+    const interval = setInterval(animateProgress, 50); // Update every 50ms
+    return () => clearInterval(interval);
+  }, [isGenerating, progress, lastProgressUpdate]);
+
   // Progress polling effect
   useEffect(() => {
     if (!isGenerating) return;
-    
+
     const progressPollInterval = setInterval(async () => {
       try {
         const { data } = await axios.get(`${API_URL}/generation-progress/`);
         setProgress(data.progress);
         setProgressStage(data.stage);
+        setLastProgressUpdate(Date.now()); // Update last progress time
 
-        if (data.progress >= 100 || !data.is_generating || data.stage.startsWith("Error")) {
+        if (
+          data.progress >= 100 ||
+          !data.is_generating ||
+          data.stage.startsWith("Error")
+        ) {
           clearInterval(progressPollInterval);
           setIsGenerating(false);
+          setDisplayProgress(100); // Ensure display reaches 100%
         }
       } catch (err) {
         console.error("Error polling progress:", err);
@@ -59,7 +94,7 @@ function AudioPage() {
           if (!categories[voice.category]) categories[voice.category] = [];
           categories[voice.category].push(voice);
         });
-        
+
         setVoiceCategories(categories);
       } catch (error) {
         console.error("Error fetching default voices:", error);
@@ -79,24 +114,32 @@ function AudioPage() {
 
       try {
         const { data } = await axios.get(`${API_URL}/latest-story/`);
-        
+
         if (data.error) {
           setStatus(`Error: ${data.error}`);
           return;
         }
-        
+
         setStoryFilename(data.filename);
         setParsedCharacters(data.characters);
-        
+
         // Initialize empty voice selection for each character
         const newCharacterVoices = {};
-        data.characters.forEach(character => newCharacterVoices[character] = "");
+        data.characters.forEach(
+          (character) => (newCharacterVoices[character] = "")
+        );
         setCharacterVoices(newCharacterVoices);
-        
-        setStatus(`Loaded "${data.filename}" with ${data.characters.length} characters.`);
+
+        setStatus(
+          `Loaded "${data.filename}" with ${data.characters.length} characters.`
+        );
       } catch (error) {
         console.error("Error fetching latest story:", error);
-        setStatus(`Error loading story: ${error.response?.data?.detail || error.message}`);
+        setStatus(
+          `Error loading story: ${
+            error.response?.data?.detail || error.message
+          }`
+        );
       } finally {
         setIsLoading(false);
       }
@@ -119,51 +162,26 @@ function AudioPage() {
     try {
       const { data } = await axios.post(`${API_URL}/upload-voice/`, formData);
       const uploadedFilename = data.filename;
-      
-      if (!uploadedFilename) throw new Error("Backend did not return a filename");
 
-      setVoiceFiles(prev => ({ ...prev, [character]: file }));
-      setCharacterVoices(prev => ({ ...prev, [character]: `uploaded:${uploadedFilename}` }));
+      if (!uploadedFilename)
+        throw new Error("Backend did not return a filename");
+
+      setVoiceFiles((prev) => ({ ...prev, [character]: file }));
+      setCharacterVoices((prev) => ({
+        ...prev,
+        [character]: `uploaded:${uploadedFilename}`,
+      }));
       setStatus(`Voice for ${character} uploaded successfully.`);
     } catch (error) {
       console.error("Error uploading voice:", error);
-      setStatus(`Error uploading voice: ${error.response?.data?.detail || error.message}`);
+      setStatus(
+        `Error uploading voice: ${
+          error.response?.data?.detail || error.message
+        }`
+      );
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Add a new custom character
-  const handleAddCharacter = () => {
-    let newName = "Character";
-    let counter = 1;
-
-    while (parsedCharacters.includes(`${newName} ${counter}`)) {
-      counter++;
-    }
-
-    const newCharacter = `${newName} ${counter}`;
-    setParsedCharacters(prev => [...prev, newCharacter]);
-    setCharacterVoices(prev => ({ ...prev, [newCharacter]: "" }));
-  };
-
-  // Remove a character
-  const handleRemoveCharacter = (character) => {
-    if (parsedCharacters.length <= 1) {
-      setStatus("You need at least one character.");
-      return;
-    }
-
-    setParsedCharacters(prev => prev.filter(char => char !== character));
-    
-    // Create new objects without the removed character
-    const newCharacterVoices = { ...characterVoices };
-    delete newCharacterVoices[character];
-    setCharacterVoices(newCharacterVoices);
-
-    const newVoiceFiles = { ...voiceFiles };
-    delete newVoiceFiles[character];
-    setVoiceFiles(newVoiceFiles);
   };
 
   // Generate the audiobook
@@ -174,7 +192,9 @@ function AudioPage() {
       .map(([character, _]) => character);
 
     if (invalidCharacters.length > 0) {
-      setStatus(`Please select or upload a voice for: ${invalidCharacters.join(", ")}`);
+      setStatus(
+        `Please select or upload a voice for: ${invalidCharacters.join(", ")}`
+      );
       return;
     }
 
@@ -183,21 +203,27 @@ function AudioPage() {
     setIsLoading(true);
     setAudioUrl(null);
     setProgress(0);
+    setDisplayProgress(0);
     setProgressStage("Starting generation process");
     setIsGenerating(true);
 
     const formData = new FormData();
-    
+
     // Create a blank file representation for input_file
-    const emptyBlob = new Blob([''], { type: 'text/plain' });
-    const dummyFile = new File([emptyBlob], 'input.txt', { type: 'text/plain' });
+    const emptyBlob = new Blob([""], { type: "text/plain" });
+    const dummyFile = new File([emptyBlob], "input.txt", {
+      type: "text/plain",
+    });
     formData.append("input_file", dummyFile);
 
     // Process voice paths for the API
     const processedVoices = {};
     Object.entries(characterVoices).forEach(([character, voice]) => {
       if (voice.startsWith("default:")) {
-        processedVoices[character] = `default_voices/${voice.replace("default:", "")}`;
+        processedVoices[character] = `default_voices/${voice.replace(
+          "default:",
+          ""
+        )}`;
       } else if (voice.startsWith("uploaded:")) {
         processedVoices[character] = voice;
       }
@@ -211,6 +237,7 @@ function AudioPage() {
       });
 
       setProgress(100);
+      setDisplayProgress(100);
       setProgressStage("Complete!");
       const url = window.URL.createObjectURL(new Blob([res.data]));
       setAudioUrl(url);
@@ -227,7 +254,7 @@ function AudioPage() {
   // Helper to handle generation errors
   const handleGenerationError = (error) => {
     let errorMessage = "Error generating audio";
-    
+
     if (error.response) {
       try {
         const reader = new FileReader();
@@ -253,127 +280,189 @@ function AudioPage() {
     .filter(([_, voice]) => !voice)
     .map(([character]) => character);
 
-  // Component rendering
   return (
-    <div className="app-container" style={styles.container}>
-      <h1 style={styles.title}>Audiobook Generator</h1>
-
-      {/* Story info section */}
-      <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Current Story</h3>
-        {storyFilename ? (
-          <div style={styles.fileInfo}>
-            <p>
-              <strong>Story:</strong> {storyFilename}
-            </p>
-            <p>
-              <strong>Characters:</strong> {parsedCharacters.length > 0 
-                ? parsedCharacters.join(", ") 
-                : "No characters found"
-              }
-            </p>
+    <div className="min-h-screen bg-gradient-to-b from-indigo-50 via-purple-100 to-blue-50 text-gray-800 relative overflow-hidden">
+      <div className="container mx-auto px-4 py-6 max-w-3xl relative z-10">
+        {/* Header */}
+        <div className="flex items-center justify-center mb-5">
+          <div className="relative w-10 h-10 bg-gradient-to-tr from-purple-600 to-blue-500 rounded-lg overflow-hidden flex items-center justify-center mr-2">
+            <Headphones size={20} className="text-white" />
           </div>
-        ) : (
-          <div style={styles.loadingMessage}>
-            {isLoading ? "Loading story..." : "No story loaded."}
-          </div>
-        )}
-      </div>
-
-      {/* Character voices section */}
-      {parsedCharacters.length > 0 && (
-        <div style={styles.section}>
-          <h3 style={styles.sectionTitle}>Character Voices</h3>
-          <p>Assign a voice to each character in your story:</p>
-
-          {parsedCharacters.map((character) => (
-            <CharacterVoiceSelector
-              key={character}
-              character={character}
-              characterVoices={characterVoices}
-              setCharacterVoices={setCharacterVoices}
-              voiceFiles={voiceFiles}
-              voiceCategories={voiceCategories}
-              handleVoiceFileChange={handleVoiceFileChange}
-              handleRemoveCharacter={handleRemoveCharacter}
-              isLoading={isLoading}
-              isGenerating={isGenerating}
-            />
-          ))}
-
-          <button
-            onClick={handleAddCharacter}
-            style={{
-              ...styles.button,
-              backgroundColor: "#4CAF50",
-              opacity: isLoading || isGenerating ? 0.7 : 1,
-            }}
-            disabled={isLoading || isGenerating}
-          >
-            Add Custom Character
-          </button>
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-600 to-blue-600">
+            Audiobook Generator
+          </h1>
         </div>
-      )}
 
-      {/* Generate button */}
-      <button
-        onClick={handleSubmit}
-        disabled={
-          isLoading ||
-          isGenerating ||
-          parsedCharacters.length === 0 ||
-          remainingCharacters.length > 0
-        }
-        style={{
-          ...styles.button,
-          ...styles.generateButton,
-          opacity:
-            isLoading ||
-            isGenerating ||
-            parsedCharacters.length === 0 ||
-            remainingCharacters.length > 0
-              ? 0.7
-              : 1,
-          cursor:
-            isLoading ||
-            isGenerating ||
-            parsedCharacters.length === 0 ||
-            remainingCharacters.length > 0
-              ? "not-allowed"
-              : "pointer",
-        }}
-      >
-        {isGenerating ? "Generating..." : "Generate Audiobook"}
-      </button>
+        {/* Story Info Section */}
+        <div className="bg-white bg-opacity-90 backdrop-blur-md rounded-xl p-5 mb-5 border border-purple-200 shadow-md">
+          <h3 className="text-xl font-bold mb-3 text-gray-800">
+            Current Story
+          </h3>
+          {storyFilename ? (
+            <div className="bg-purple-50 rounded-lg p-3 border border-purple-100">
+              <p className="text-base mb-1">
+                <strong className="text-purple-700">Story:</strong>{" "}
+                {storyFilename}
+              </p>
+              <p className="text-base">
+                <strong className="text-purple-700">Characters:</strong>{" "}
+                {parsedCharacters.length > 0
+                  ? parsedCharacters.join(", ")
+                  : "No characters found"}
+              </p>
+            </div>
+          ) : (
+            <div className="text-center text-base text-gray-600 italic p-3 bg-gray-50 rounded-lg">
+              {isLoading ? (
+                <div className="flex items-center justify-center">
+                  <div className="orbit-animation">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                  <span className="ml-2">Loading story...</span>
+                </div>
+              ) : (
+                "No story loaded."
+              )}
+            </div>
+          )}
+        </div>
 
-      {/* Progress bar */}
-      {(isLoading || isGenerating) && (
-        <ProgressBar progress={progress} progressStage={progressStage} />
-      )}
-
-      {/* Status and result section */}
-      <div style={{ marginTop: "25px" }}>
-        {status && (
-          <p style={{
-            ...styles.status,
-            backgroundColor: status.startsWith("Error")
-              ? "#ffebee"
-              : status.startsWith("Audio generated")
-              ? "#e8f5e9"
-              : "#e3f2fd",
-            color: status.startsWith("Error")
-              ? "#c62828"
-              : status.startsWith("Audio generated")
-              ? "#2e7d32"
-              : "#1565c0",
-          }}>
-            {status}
-          </p>
+        {/* Character Voices Section */}
+        {parsedCharacters.length > 0 && (
+          <div className="bg-white bg-opacity-90 backdrop-blur-md rounded-xl p-5 mb-5 border border-purple-200 shadow-md">
+            <h3 className="text-xl font-bold mb-3 text-gray-800">
+              Character Voices
+            </h3>
+            <p className="text-base text-gray-600 mb-3">
+              Assign a voice to each character:
+            </p>
+            {parsedCharacters.map((character) => (
+              <CharacterVoiceSelector
+                key={character}
+                character={character}
+                characterVoices={characterVoices}
+                setCharacterVoices={setCharacterVoices}
+                voiceFiles={voiceFiles}
+                voiceCategories={voiceCategories}
+                handleVoiceFileChange={handleVoiceFileChange}
+                isLoading={isLoading}
+                isGenerating={isGenerating}
+              />
+            ))}
+          </div>
         )}
 
-        {/* Audio player */}
-        {audioUrl && <AudioPlayer audioUrl={audioUrl} />}
+        {/* Generate Button */}
+        <button
+          onClick={handleSubmit}
+          disabled={
+            isLoading ||
+            isGenerating ||
+            parsedCharacters.length === 0 ||
+            remainingCharacters.length > 0
+          }
+          className={`w-full px-6 py-3 rounded-xl transition-all duration-300 shadow-md text-lg font-medium text-white ${
+            isLoading ||
+            isGenerating ||
+            parsedCharacters.length === 0 ||
+            remainingCharacters.length > 0
+              ? "bg-gray-300 cursor-not-allowed"
+              : "bg-gradient-to-r from-purple-600 to-blue-500 hover:from-purple-700 hover:to-blue-600 hover:shadow-lg"
+          }`}
+        >
+          {isGenerating ? (
+            <div className="flex items-center justify-center">
+              <div className="orbit-animation">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span className="ml-2">Generating...</span>
+            </div>
+          ) : (
+            "Generate Audiobook"
+          )}
+        </button>
+
+        {/* Progress Bar */}
+        {(isLoading || isGenerating) && (
+          <ProgressBar
+            progress={displayProgress}
+            progressStage={progressStage}
+          />
+        )}
+
+        {/* Status and Result Section */}
+        <div className="mt-5">
+          {status && (
+            <p
+              className={`p-3 rounded-xl font-medium text-base ${
+                status.startsWith("Error")
+                  ? "bg-red-50 text-red-700 border border-red-200"
+                  : status.startsWith("Audio generated")
+                  ? "bg-green-50 text-green-700 border border-green-200"
+                  : "bg-blue-50 text-blue-700 border border-blue-200"
+              }`}
+            >
+              {status}
+            </p>
+          )}
+
+          {/* Audio Player */}
+          {audioUrl && <AudioPlayer audioUrl={audioUrl} />}
+        </div>
       </div>
+
+      {/* Inline CSS for Loading Animation */}
+      <style jsx>{`
+        .soundwave-animation {
+          position: relative;
+          width: 40px;
+          height: 20px;
+          display: inline-block;
+        }
+        .soundwave-animation span {
+          position: absolute;
+          bottom: 0;
+          width: 4px;
+          background: linear-gradient(to top, #4f46e5, #9333ea);
+          animation: soundwave 1.5s infinite ease-in-out;
+          transform-origin: bottom;
+        }
+        .soundwave-animation span:nth-child(1) {
+          left: 0;
+          height: 10px;
+          animation-delay: 0s;
+        }
+        .soundwave-animation span:nth-child(2) {
+          left: 10px;
+          height: 15px;
+          animation-delay: 0.2s;
+        }
+        .soundwave-animation span:nth-child(3) {
+          left: 20px;
+          height: 12px;
+          animation-delay: 0.4s;
+        }
+        .soundwave-animation span:nth-child(4) {
+          left: 30px;
+          height: 18px;
+          animation-delay: 0.6s;
+        }
+        @keyframes soundwave {
+          0%,
+          100% {
+            transform: scaleY(1);
+          }
+          50% {
+            transform: scaleY(2.5);
+          }
+        }
+      `}</style>
     </div>
   );
 }
@@ -386,22 +475,21 @@ const CharacterVoiceSelector = ({
   voiceFiles,
   voiceCategories,
   handleVoiceFileChange,
-  handleRemoveCharacter,
   isLoading,
-  isGenerating
+  isGenerating,
 }) => {
   const hasVoice = Boolean(characterVoices[character]);
   const isUploadedVoice = characterVoices[character]?.startsWith("uploaded:");
   const isDefaultVoice = !isUploadedVoice && hasVoice;
-  
+
   // Reference to the file input element
-  const fileInputRef = React.useRef(null);
-  
+  const fileInputRef = useRef(null);
+
   // Function to handle the "Upload Voice" tab click
   const handleUploadTabClick = () => {
     if (!isUploadedVoice) {
-      setCharacterVoices(prev => ({ ...prev, [character]: "" }));
-      
+      setCharacterVoices((prev) => ({ ...prev, [character]: "" }));
+
       // Automatically trigger the file input dialog after switching to the upload tab
       setTimeout(() => {
         if (fileInputRef.current) {
@@ -410,88 +498,85 @@ const CharacterVoiceSelector = ({
       }, 100);
     }
   };
-  
+
   return (
-    <div style={{
-      ...styles.characterCard,
-      backgroundColor: hasVoice ? "#f0f8ff" : "#fffaf0",
-      border: hasVoice ? "1px solid #b3d7ff" : "1px solid #ffeeba",
-    }}>
-      <div style={styles.characterHeader}>
-        <label style={styles.characterName}>{character}</label>
-        <button
-          onClick={() => handleRemoveCharacter(character)}
-          style={styles.removeButton}
-          disabled={isLoading || isGenerating}
-        >
-          Remove
-        </button>
+    <div
+      className={`mb-3 p-3 rounded-lg border transition-all duration-300 ${
+        hasVoice ? "bg-blue-50 border-blue-100" : "bg-gray-50 border-gray-100"
+      }`}
+    >
+      <div className="flex items-center mb-2">
+        <Mic size={18} className="text-purple-600 mr-2" />
+        <label className="text-lg font-semibold text-gray-800">
+          {character}
+        </label>
       </div>
 
-      <div style={styles.voiceOptions}>
-        <div style={styles.tabButtons}>
+      <div className="mt-1">
+        <div className="flex border-b border-gray-200 mb-2">
           <button
-            onClick={() => setCharacterVoices(prev => ({ ...prev, [character]: "" }))}
-            style={{
-              ...styles.tabButton,
-              backgroundColor: (isDefaultVoice || !hasVoice) ? "#f5f5f5" : "white",
-              borderBottom: (isDefaultVoice || !hasVoice) ? "none" : "1px solid #ddd",
-            }}
+            onClick={() =>
+              setCharacterVoices((prev) => ({ ...prev, [character]: "" }))
+            }
+            className={`px-2 py-1 font-medium text-gray-700 rounded-t-lg transition-all duration-300 text-sm ${
+              isDefaultVoice || !hasVoice
+                ? "bg-white border-b-2 border-purple-600"
+                : "bg-gray-100 hover:bg-gray-200"
+            }`}
             disabled={isLoading || isGenerating}
           >
             Default Voices
           </button>
           <button
             onClick={handleUploadTabClick}
-            style={{
-              ...styles.tabButton,
-              backgroundColor: isUploadedVoice ? "#f5f5f5" : "white",
-              borderBottom: isUploadedVoice ? "none" : "1px solid #ddd",
-            }}
+            className={`px-2 py-1 font-medium text-gray-700 rounded-t-lg transition-all duration-300 text-sm ${
+              isUploadedVoice
+                ? "bg-white border-b-2 border-purple-600"
+                : "bg-gray-100 hover:bg-gray-200"
+            }`}
             disabled={isLoading || isGenerating}
           >
             Upload Voice
           </button>
         </div>
 
-        {/* Default voice selector */}
+        {/* Default Voice Selector */}
         {(!hasVoice || isDefaultVoice) && (
-          <div style={styles.tabContent}>
-            <div style={{ marginBottom: "15px" }}>
-              <label style={{ display: "block", marginBottom: "8px" }}>
-                Select a default voice:
-              </label>
-              <select
-                value={characterVoices[character]?.replace("default:", "") || ""}
-                onChange={(e) => {
-                  const selectedVoice = e.target.value;
-                  setCharacterVoices(prev => ({
-                    ...prev,
-                    [character]: selectedVoice ? `default:${selectedVoice}` : "",
-                  }));
-                }}
-                style={styles.select}
-                disabled={isLoading || isGenerating}
-              >
-                <option value="">-- Select a voice --</option>
-                {Object.keys(voiceCategories).map((category) => (
-                  <optgroup key={category} label={category}>
-                    {voiceCategories[category].map((voice) => (
-                      <option key={voice.filename} value={voice.filename}>
-                        {voice.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </div>
+          <div className="p-2 bg-white rounded-b-lg border border-gray-200">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Select a default voice:
+            </label>
+            <select
+              value={characterVoices[character]?.replace("default:", "") || ""}
+              onChange={(e) => {
+                const selectedVoice = e.target.value;
+                setCharacterVoices((prev) => ({
+                  ...prev,
+                  [character]: selectedVoice ? `default:${selectedVoice}` : "",
+                }));
+              }}
+              className="w-full px-2 py-1 rounded-lg bg-white border border-gray-300 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-100 transition-all text-base"
+              disabled={isLoading || isGenerating}
+            >
+              <option value="">-- Select a voice --</option>
+              {Object.keys(voiceCategories).map((category) => (
+                <optgroup key={category} label={category}>
+                  {voiceCategories[category].map((voice) => (
+                    <option key={voice.filename} value={voice.filename}>
+                      {voice.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
 
-            {/* Voice preview */}
+            {/* Voice Preview */}
             {isDefaultVoice && (
-              <div style={styles.audioPreview}>
+              <div className="mt-2 bg-gray-50 p-2 rounded-lg">
                 <audio
                   controls
-                  style={{ height: "30px", width: "100%" }}
+                  className="w-full"
+                  style={{ height: "32px" }}
                   src={`${API_URL}/voices/preview/${encodeURIComponent(
                     characterVoices[character].replace("default:", "")
                   )}`}
@@ -503,25 +588,45 @@ const CharacterVoiceSelector = ({
           </div>
         )}
 
-        {/* Voice upload option */}
+        {/* Voice Upload Option */}
         {(isUploadedVoice || !hasVoice || isDefaultVoice) && (
-          <div style={isUploadedVoice ? styles.tabContent : { display: 'none' }}>
+          <div
+            className={
+              isUploadedVoice
+                ? "p-2 bg-white rounded-b-lg border border-gray-200"
+                : "hidden"
+            }
+          >
             <input
               ref={fileInputRef}
               type="file"
               accept=".wav,.mp3"
               onChange={(e) => handleVoiceFileChange(character, e)}
-              style={isUploadedVoice ? styles.fileInput : { display: 'none' }}
+              className={
+                isUploadedVoice
+                  ? "block w-full text-base text-gray-700"
+                  : "hidden"
+              }
               disabled={isLoading || isGenerating}
             />
 
             {voiceFiles[character] && (
-              <div style={styles.uploadedFile}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4caf50" strokeWidth="2">
+              <div className="mt-2 bg-green-50 p-2 rounded-lg flex items-center">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 10"
+                  fill="none"
+                  stroke="#10b981"
+                  strokeWidth="2"
+                  className="mr-1"
+                >
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
                   <polyline points="22 4 12 14.01 9 11.01"></polyline>
                 </svg>
-                <span><strong>{voiceFiles[character].name}</strong></span>
+                <span className="text-base text-green-700">
+                  <strong>{voiceFiles[character].name}</strong>
+                </span>
               </div>
             )}
           </div>
@@ -531,247 +636,39 @@ const CharacterVoiceSelector = ({
   );
 };
 
-// Progress bar component
+// Progress Bar Component
 const ProgressBar = ({ progress, progressStage }) => (
-  <div style={styles.progressContainer}>
-    <p style={styles.progressStage}>{progressStage}</p>
-    <div style={styles.progressBarContainer}>
-      <div 
-        style={{
-          ...styles.progressBar,
-          width: `${progress}%`,
-        }}
+  <div className="mt-5 p-3 bg-white bg-opacity-90 backdrop-blur-md rounded-xl border border-purple-200 shadow-md">
+    <p className="text-base font-semibold text-gray-800 text-center mb-2">
+      {progressStage}
+    </p>
+    <div className="relative w-full h-5 bg-gray-100 rounded-full overflow-hidden">
+      <div
+        className="h-full bg-gradient-to-r from-purple-600 to-blue-500 rounded-full transition-all duration-500"
+        style={{ width: `${progress}%` }}
       ></div>
-      <div style={styles.progressText}>{progress}%</div>
+      <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white">
+        {Math.round(progress)}%
+      </div>
     </div>
   </div>
 );
 
-// Audio player component
-const AudioPlayer = ({ audioUrl }) => {
-  return (
-    <div style={styles.audioPlayerContainer}>
-      <h3 style={styles.audioTitle}>Your Audiobook</h3>
-      <SubtitlePlayer audioUrl={audioUrl} />
-      <a href={audioUrl} download="audiobook.mp3" style={styles.downloadButton}>
-        Download Audiobook
-      </a>
-    </div>
-  );
-};
-
-// Styles
-const styles = {
-  container: {
-    padding: "20px",
-    maxWidth: "800px",
-    margin: "0 auto",
-    fontFamily: "Arial, sans-serif",
-  },
-  title: {
-    textAlign: "center",
-    color: "#333",
-  },
-  section: {
-    marginBottom: "20px",
-    padding: "15px",
-    border: "1px solid #ddd",
-    borderRadius: "8px",
-    boxShadow: "0 2px 5px rgba(0,0,0,0.1)",
-  },
-  sectionTitle: {
-    marginBottom: "15px",
-    color: "#333",
-  },
-  label: {
-    display: "block",
-    marginBottom: "10px",
-    fontWeight: "bold",
-    fontSize: "16px",
-  },
-  fileInput: {
-    padding: "8px",
-    width: "100%",
-    border: "1px solid #ddd",
-    borderRadius: "4px",
-  },
-  fileInfo: {
-    backgroundColor: "#f8f9fa",
-    padding: "12px",
-    borderRadius: "4px",
-    border: "1px solid #e3f2fd",
-  },
-  loadingMessage: {
-    padding: "12px",
-    borderRadius: "4px",
-    backgroundColor: "#f5f5f5",
-    textAlign: "center",
-    fontStyle: "italic",
-  },
-  button: {
-    marginTop: "15px",
-    padding: "10px 16px",
-    color: "white",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-    fontSize: "14px",
-  },
-  generateButton: {
-    display: "block",
-    width: "100%",
-    padding: "15px 24px",
-    backgroundColor: "#007BFF",
-    fontSize: "16px",
-    fontWeight: "bold",
-    boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
-    transition: "all 0.3s ease",
-  },
-  characterCard: {
-    margin: "15px 0",
-    padding: "15px",
-    borderRadius: "6px",
-  },
-  characterHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  characterName: {
-    fontWeight: "bold",
-    fontSize: "16px",
-  },
-  removeButton: {
-    padding: "5px 10px",
-    backgroundColor: "#ff6b6b",
-    color: "white",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-    fontSize: "14px",
-  },
-  voiceOptions: {
-    marginTop: "10px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "15px",
-  },
-  tabButtons: {
-    display: "flex",
-    borderBottom: "1px solid #ddd",
-  },
-  tabButton: {
-    padding: "8px 16px",
-    border: "1px solid #ddd",
-    borderTopLeftRadius: "4px",
-    borderTopRightRadius: "4px",
-    marginRight: "4px",
-    cursor: "pointer",
-  },
-  tabContent: {
-    padding: "15px",
-    border: "1px solid #ddd",
-    borderTop: "none",
-    borderRadius: "0 0 4px 4px",
-  },
-  select: {
-    width: "100%",
-    padding: "8px",
-    borderRadius: "4px",
-    border: "1px solid #ddd",
-  },
-  audioPreview: {
-    backgroundColor: "#f5f5f5",
-    padding: "10px",
-    borderRadius: "4px",
-    display: "flex",
-    alignItems: "center",
-  },
-  uploadedFile: {
-    marginTop: "10px",
-    backgroundColor: "#e8f5e9",
-    padding: "8px 12px",
-    borderRadius: "4px",
-    display: "flex",
-    alignItems: "center",
-    gap: "5px",
-  },
-  progressContainer: {
-    marginTop: "25px",
-    padding: "15px",
-    border: "1px solid #e0e0e0",
-    borderRadius: "8px",
-  },
-  progressStage: {
-    fontWeight: "bold",
-    textAlign: "center",
-    fontSize: "16px",
-    marginBottom: "10px",
-    color: "#333",
-  },
-  progressBarContainer: {
-    width: "100%",
-    height: "24px",
-    backgroundColor: "#e0e0e0",
-    borderRadius: "12px",
-    overflow: "hidden",
-    position: "relative",
-  },
-  progressBar: {
-    height: "100%",
-    backgroundColor: "#4CAF50",
-    borderRadius: "12px",
-    transition: "width 0.5s ease-in-out",
-  },
-  progressText: {
-    position: "absolute",
-    top: "0",
-    left: "0",
-    right: "0",
-    bottom: "0",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: "bold",
-    transition: "color 0.3s ease",
-  },
-  status: {
-    padding: "10px",
-    borderRadius: "5px",
-    fontWeight: "bold",
-  },
-  audioPlayerContainer: {
-    marginTop: "25px",
-    padding: "20px",
-    border: "1px solid #ddd",
-    borderRadius: "8px",
-    backgroundColor: "#f5f5f5",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-  },
-  audioTitle: {
-    textAlign: "center",
-    marginBottom: "15px",
-    color: "#333",
-  },
-  audioPlayer: {
-    width: "100%",
-    marginTop: "10px",
-    borderRadius: "8px",
-    boxShadow: "0 2px 5px rgba(0,0,0,0.1)",
-  },
-  downloadButton: {
-    display: "block",
-    width: "100%",
-    textAlign: "center",
-    marginTop: "20px",
-    padding: "12px 20px",
-    backgroundColor: "#28a745",
-    color: "white",
-    textDecoration: "none",
-    borderRadius: "6px",
-    fontWeight: "bold",
-    boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
-  },
-};
+// Audio Player Component
+const AudioPlayer = ({ audioUrl }) => (
+  <div className="mt-5 p-5 bg-white bg-opacity-90 backdrop-blur-md rounded-xl border border-purple-200 shadow-md">
+    <h3 className="text-xl font-bold text-gray-800 text-center mb-3">
+      Your Audiobook
+    </h3>
+    <SubtitlePlayer audioUrl={audioUrl} />
+    <a
+      href={audioUrl}
+      download="audiobook.mp3"
+      className="block w-full text-center mt-3 px-5 py-2 bg-gradient-to-r from-green-600 to-teal-500 hover:from-green-700 hover:to-teal-600 rounded-xl transition-all duration-300 shadow-md hover:shadow-lg font-medium text-base text-white"
+    >
+      Download Audiobook
+    </a>
+  </div>
+);
 
 export default AudioPage;
